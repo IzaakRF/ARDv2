@@ -12,6 +12,7 @@ import {
 import { DATA_COLUMNS, STATUS, Telemetry } from "@/types";
 import {
   DataSource,
+  FeatherweightTelemetryParser,
   parseCotsGpsTelemetry,
   parseTelemetryCsv,
   parseSradTelemetry,
@@ -73,6 +74,7 @@ export default function SettingsPage({
   const [maxHeightMessage, setMaxHeightMessage] = useState("");
   const [connectionError, setConnectionError] = useState("");
   const readerRef = useRef<ReadableStreamDefaultReader | null>(null); 
+  const fwtParserRef = useRef(new FeatherweightTelemetryParser());
   const websocketRef = useRef<WebSocket | null>(null);
   const streamStartTimeRef = useRef<number>(0);
   const replayTimerRef = useRef<number | null>(null);
@@ -165,6 +167,7 @@ export default function SettingsPage({
   const connectPort = useCallback(async () => {
     if (!selectedPort) return;
     setConnectionError("");
+    fwtParserRef.current.reset();
     try {
         console.log("INFO: Connecting to port:", selectedPort);
       await selectedPort.open({ baudRate: DEFAULT_CONFIG.connection.baudRate });
@@ -181,6 +184,24 @@ export default function SettingsPage({
       while (true) {
         const { value, done } = await reader.read();
         if (done || !value) break;
+
+        if (dataSource === "cots") {
+          const parsed = fwtParserRef.current.push(
+            value,
+            Date.now() - streamStartTimeRef.current,
+          );
+
+          setRawData((previous) =>
+            previous +
+            parsed.text.join("\r\n") +
+            parsed.binaryHex.map((frame) => `FWT ${frame}\r\n`).join(""),
+          );
+          parsed.warnings.forEach((warning) => console.warn(warning));
+          parsed.telemetry.forEach((packet) => {
+            setTelemetryData((previous) => [...previous, packet]);
+          });
+          continue;
+        }
 
         buffer += new TextDecoder().decode(value);
 
