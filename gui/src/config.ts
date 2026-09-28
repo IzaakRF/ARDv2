@@ -2,8 +2,8 @@ import type { DataSource } from "./serialParsers";
 
 export const DEFAULT_CONFIG = {
   launchSite: {
-    latitude: -34.429494,
-    longitude: 139.600430,
+    latitude: -30.664806,
+    longitude: 143.196306,
   },
   targetAltitude: 10000,
   connection: {
