@@ -71,6 +71,7 @@ export default function SettingsPage({
   const [launchSiteMessage, setLaunchSiteMessage] = useState("");
   const [maxHeightInput, setMaxHeightInput] = useState(String(targetHeight));
   const [maxHeightMessage, setMaxHeightMessage] = useState("");
+  const [connectionError, setConnectionError] = useState("");
   const readerRef = useRef<ReadableStreamDefaultReader | null>(null); 
   const websocketRef = useRef<WebSocket | null>(null);
   const streamStartTimeRef = useRef<number>(0);
@@ -163,6 +164,7 @@ export default function SettingsPage({
 
   const connectPort = useCallback(async () => {
     if (!selectedPort) return;
+    setConnectionError("");
     try {
         console.log("INFO: Connecting to port:", selectedPort);
       await selectedPort.open({ baudRate: DEFAULT_CONFIG.connection.baudRate });
@@ -171,8 +173,7 @@ export default function SettingsPage({
 
       const reader = selectedPort.readable?.getReader();
       if (!reader) {
-        console.log("ERROR: No reader available");
-        return;
+        throw new Error("Serial port opened without a readable stream");
       }
       readerRef.current = reader; 
 
@@ -201,8 +202,39 @@ export default function SettingsPage({
           }
         }
       }
+
+      if (readerRef.current === reader) {
+        reader.releaseLock();
+        readerRef.current = null;
+      }
+      try {
+        await selectedPort.close();
+      } catch (closeError) {
+        console.error("Failed to close serial port after stream ended:", closeError);
+      }
+      setPortStatus(STATUS.DISCONNECTED);
     } catch (err) {
+      const message = err instanceof Error ? err.message : String(err);
       console.error("Failed to connect:", err);
+      setConnectionError(message);
+
+      if (readerRef.current) {
+        try {
+          await readerRef.current.cancel();
+          readerRef.current.releaseLock();
+        } catch (releaseError) {
+          console.error("Failed to release serial reader:", releaseError);
+        } finally {
+          readerRef.current = null;
+        }
+      }
+
+      try {
+        await selectedPort.close();
+      } catch (closeError) {
+        console.error("Failed to close serial port after connection error:", closeError);
+      }
+
       setPortStatus(STATUS.DISCONNECTED);
     }
   }, [dataSource, selectedPort, setPortStatus, setTelemetryData]);
@@ -682,6 +714,9 @@ export default function SettingsPage({
 
       <div className="mt-16">
       <p>Port Status: {portStatus}</p>
+        {connectionError && (
+          <p className="text-red-400">Serial error: {connectionError}</p>
+        )}
         {isSradWebSocket && (
           <p>
             LoRa receiver: {healthStatus === "healthy"
