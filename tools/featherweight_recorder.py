@@ -82,7 +82,8 @@ def main():
         default="featherweight_record_file.txt",
     )
     args = parser.parse_args()
-
+    PORT = "/dev/tty.usbserial-DK0JXP7Q"
+    BAUD = 115200
     print(f"{Colors.BOLD}Starting Featherweight Live Telemetry on {PORT}...{Colors.ENDC}")
     print("Waiting for data...\n" + "="*50)
 
