@@ -31,6 +31,15 @@ export function parseSradTelemetry(line: string): Telemetry | null {
     gyroZ: values[9]!,
     lat: values[10]!,
     lon: values[11]!,
+    // Optional receiver status fields 12-15: rssi,snr,sats,gpsFix
+    ...(parts.length >= 16
+      ? {
+          rssi: numberOrNull(parts[12]),
+          snr: numberOrNull(parts[13]),
+          sats: numberOrNull(parts[14]),
+          gpsFix: numberOrNull(parts[15]),
+        }
+      : {}),
   };
 }
 

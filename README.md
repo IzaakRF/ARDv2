@@ -57,7 +57,7 @@ The GUI can read telemetry from either a Web Serial connection or a WebSocket co
 
 The GUI supports two telemetry sources:
 
-- **SRAD:** 12-field CSV telemetry containing time, temperature, pressure, altitude, acceleration, angular velocity, latitude, and longitude. The GUI stores and exports altitude in feet.
+- **SRAD:** 12-field CSV telemetry containing time, temperature, pressure, altitude, acceleration, angular velocity, latitude, and longitude. The GUI stores and exports altitude in feet. A line may carry four optional status fields after the 12: `rssi` (dBm), `snr` (dB), `sats` (GPS satellites) and `gpsFix` (1/0). The ESP32 receiver for the Telemetry Board sends them; they drive the **Signal** (dBm) indicator and the **LoRa Link** and **GPS Lock** status. Lat/lon of `0,0` means no GPS fix.
 - **COTS Feather:** `GPS_STAT` packets containing latitude, longitude, and altitude in feet. Unavailable sensor values are shown as `--.--`.
 
 On the Settings page you can:
@@ -68,7 +68,9 @@ On the Settings page you can:
 - Change and apply the launch-site latitude and longitude.
 - Export the collected telemetry history as a timestamped CSV file.
 
-The map uses local satellite tiles and supports an interactive elevated flight-path overlay. Map tiles can be downloaded for a chosen center coordinate and radius with the offline map downloader. The downloader keeps its zoom levels hardcoded and writes tiles into `gui/public/maps`.
+The map uses local satellite tiles over an offline OpenStreetMap street map (committed in `gui/public/basemap`, covering White Cliffs, Caradoc Station and the Goodwood test area), and supports an interactive elevated flight-path overlay. It follows the rocket by default (dragging the map turns this off), and shows LoRa link and GPS lock status. Satellite tiles can be downloaded for a chosen center coordinate and radius with the offline map downloader, which writes them into `gui/public/maps` (not committed). See [offlinemap/README.md](offlinemap/README.md).
+
+**LoRa Link** shows "No connection" when the transport is connected but no telemetry has arrived for 6 s (the Telemetry Board sends a packet every 2 s).
 
 ### Raspberry Pi LoRa Receiver
 

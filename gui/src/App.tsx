@@ -1,4 +1,4 @@
-import { useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import LeftPane from "./components/LeftPane";
 import RightPane from "./components/RightPane";
 import { DEFAULT_TELEMETRY_DATA, PAGE, STATUS, Telemetry } from "./types";
@@ -7,6 +7,11 @@ import SettingsPage from "./pages/SettingsPage";
 import GraphPage from "./pages/GraphPage";
 import MapPage from "./pages/MapPage";
 import { DEFAULT_CONFIG } from "./config";
+
+// With the telemetry board alternating GPS and flight computer packets, the
+// receiver forwards a sample about every 2 s. No sample for this long while
+// connected means the LoRa link is down.
+const LORA_LINK_TIMEOUT_MS = 6000;
 
 import backgroundImageFile from '@/assets/background-cropped.png';
 
@@ -29,6 +34,31 @@ function App() {
   const [targetHeight, setTargetHeight] = useState<number>(
     DEFAULT_CONFIG.targetAltitude,
   );
+
+  // Track when telemetry last arrived, for the LoRa link status
+  const [lastSampleAt, setLastSampleAt] = useState<number | null>(null);
+  const [now, setNow] = useState(() => Date.now());
+  const sampleCountRef = useRef(telemetryData.length);
+  useEffect(() => {
+    if (telemetryData.length > sampleCountRef.current) {
+      setLastSampleAt(Date.now());
+    }
+    sampleCountRef.current = telemetryData.length;
+  }, [telemetryData.length]);
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(Date.now()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  useEffect(() => {
+    if (portStatus !== STATUS.CONNECTED) setLastSampleAt(null);
+  }, [portStatus]);
+
+  const loraLink: "connected" | "lost" | "offline" =
+    portStatus !== STATUS.CONNECTED
+      ? "offline"
+      : lastSampleAt !== null && now - lastSampleAt < LORA_LINK_TIMEOUT_MS
+        ? "connected"
+        : "lost";
 
   const latest =
     telemetryData[telemetryData.length - 1] || DEFAULT_TELEMETRY_DATA;
@@ -57,7 +87,9 @@ function App() {
       case PAGE.GRAPHS:
         return <GraphPage data={telemetryData} />;
       case PAGE.MAP:
-        return <MapPage data={telemetryData} launchSite={launchSite} />;
+        return (
+          <MapPage data={telemetryData} launchSite={launchSite} loraLink={loraLink} />
+        );
       default:
         return (
           <TelemetryPage
@@ -109,6 +141,7 @@ function App() {
               serial_status={portStatus}
               transport={transport}
               healthStatus={healthStatus}
+              loraLink={loraLink}
             />
           </div>
           <div className="min-h-0 flex-1 overflow-y-auto px-4 sm:px-6 md:px-8">

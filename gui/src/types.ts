@@ -35,6 +35,12 @@ export type Telemetry = {
   gyroZ: number | null;
   lat: number | null;
   lon: number | null;
+  // Optional radio/GPS status appended after the 12 SRAD fields by the ESP32
+  // ground station receiver (rssi,snr,sats,gpsFix). Absent for other sources.
+  rssi?: number | null; // LoRa packet RSSI, dBm
+  snr?: number | null; // LoRa packet SNR, dB
+  sats?: number | null; // GPS satellites used
+  gpsFix?: number | null; // 1 = rocket GPS has a fix, 0 = no fix
 };
 
 export const DEFAULT_TELEMETRY_DATA: Telemetry = {
@@ -51,6 +57,21 @@ export const DEFAULT_TELEMETRY_DATA: Telemetry = {
   lat: null,
   lon: null,
 };
+
+// True when the sample's position is a real GPS fix (gpsFix when the receiver
+// reports it, otherwise a non-zero lat/lon)
+export function hasGpsFix(data: Telemetry): boolean {
+  if (data.gpsFix !== undefined && data.gpsFix !== null) {
+    return data.gpsFix > 0;
+  }
+  return (
+    data.lat !== null &&
+    data.lon !== null &&
+    Number.isFinite(data.lat) &&
+    Number.isFinite(data.lon) &&
+    (data.lat !== 0 || data.lon !== 0)
+  );
+}
 
 export function formatTelemetryValue(
   value: number | null,

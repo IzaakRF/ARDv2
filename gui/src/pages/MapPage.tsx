@@ -2,15 +2,34 @@ import { useEffect, useRef, useState } from "react";
 import * as maplibregl from "maplibre-gl";
 import { Map as MapLibreMap, type LngLatLike } from "maplibre-gl";
 import "maplibre-gl/dist/maplibre-gl.css";
-import { Telemetry } from "@/types";
+import { hasGpsFix, Telemetry } from "@/types";
+import { Protocol } from "@/vendor/pmtiles";
+import basemapLayers from "@/basemap/layers";
 
 const MAX_MAP_POINTS = 1000;
 const MAP_BASE_URL = `${import.meta.env.BASE_URL}maps`;
 const FEET_TO_METERS = 0.3048;
 
+// Offline OpenStreetMap vector basemap (committed to git, see
+// offlinemap/README.md). Covers White Cliffs NSW, Caradoc Station and the
+// Goodwood test area; it shows wherever satellite tiles are missing.
+const BASEMAP_URL = `${window.location.origin}${import.meta.env.BASE_URL}basemap/`;
+
+let pmtilesProtocolAdded = false;
+
+const basemapBelow = basemapLayers.filter((layer) => layer.type !== "symbol");
+const basemapLabels = basemapLayers.filter((layer) => layer.type === "symbol");
+
 const offlineStyle: maplibregl.StyleSpecification = {
   version: 8,
+  glyphs: `${BASEMAP_URL}fonts/{fontstack}/{range}.pbf`,
+  sprite: `${BASEMAP_URL}sprites/v4/dark`,
   sources: {
+    basemap: {
+      type: "vector",
+      url: `pmtiles://${BASEMAP_URL}whitecliffs_region.pmtiles`,
+      attribution: "© OpenStreetMap contributors · Protomaps",
+    },
     satellite: {
       type: "raster",
       tiles: [`${MAP_BASE_URL}/tiles/{z}/{x}/{y}.jpg`],
@@ -18,13 +37,17 @@ const offlineStyle: maplibregl.StyleSpecification = {
       attribution: "Satellite imagery: local launch-site dataset",
     },
   },
+  // Street map underneath, satellite imagery on top where available, labels
+  // above both
   layers: [
+    ...basemapBelow,
     {
       id: "satellite",
       type: "raster",
       source: "satellite",
       paint: { "raster-opacity": 1 },
     },
+    ...basemapLabels,
   ],
 };
 
@@ -130,18 +153,31 @@ function FlightPathOverlay({ map, points }: { map: MapLibreMap; points: Mappable
 export default function MapPage({
   data,
   launchSite,
+  loraLink,
 }: {
   data: Telemetry[];
   launchSite: [number, number];
+  loraLink: "connected" | "lost" | "offline";
 }) {
   const mapContainerRef = useRef<HTMLDivElement>(null);
   const mapRef = useRef<MapLibreMap | null>(null);
+  const markerRef = useRef<maplibregl.Marker | null>(null);
   const [map, setMap] = useState<MapLibreMap | null>(null);
   const [hasMapTiles, setHasMapTiles] = useState(true);
+  const [follow, setFollow] = useState(true);
+  const [showImagery, setShowImagery] = useState(true);
   const mapPoints = data.filter(isValidPoint).slice(-MAX_MAP_POINTS);
+  const latestPoint = mapPoints[mapPoints.length - 1];
+  const latestSample = data[data.length - 1];
+  const gpsLocked = latestSample ? hasGpsFix(latestSample) : false;
+  const sats = latestSample?.sats ?? null;
 
   useEffect(() => {
     if (!mapContainerRef.current || mapRef.current) return;
+    if (!pmtilesProtocolAdded) {
+      maplibregl.addProtocol("pmtiles", new Protocol().tile);
+      pmtilesProtocolAdded = true;
+    }
 
     const instance = new maplibregl.Map({
       container: mapContainerRef.current,
@@ -157,8 +193,12 @@ export default function MapPage({
     instance.on("error", (event) => {
       console.error("[MapLibre] map error event:", event);
       console.error("[MapLibre] underlying error:", event.error ?? event);
-      setHasMapTiles(false);
+      if ("sourceId" in event && event.sourceId === "satellite") {
+        setHasMapTiles(false);
+      }
     });
+    // Panning by hand stops following the rocket
+    instance.on("dragstart", () => setFollow(false));
     instance.once("load", () => {
       console.info("[Map] style loaded successfully");
       setMap(instance);
@@ -168,6 +208,7 @@ export default function MapPage({
     return () => {
       instance.remove();
       mapRef.current = null;
+      markerRef.current = null;
     };
   }, []);
 
@@ -177,14 +218,34 @@ export default function MapPage({
     }
   }, [launchSite, map]);
 
-  const followLatest = () => {
-    const latest = mapPoints[mapPoints.length - 1];
-    if (!latest || !map) return;
-    map.easeTo({ center: [latest.lon, latest.lat] as LngLatLike, duration: 500 });
-  };
+  // Rocket marker at its ground position; follow it when enabled
+  useEffect(() => {
+    if (!map || !latestPoint) return;
+    const lngLat: [number, number] = [latestPoint.lon, latestPoint.lat];
+    if (!markerRef.current) {
+      const el = document.createElement("div");
+      el.className = "h-5 w-5 rounded-full border-2 border-white shadow-lg";
+      markerRef.current = new maplibregl.Marker({ element: el })
+        .setLngLat(lngLat)
+        .addTo(map);
+    }
+    markerRef.current.setLngLat(lngLat);
+    // Red with a live fix and link, amber when it's the last known position
+    markerRef.current.getElement().style.backgroundColor =
+      gpsLocked && loraLink === "connected" ? "#E72D2D" : "#f59e0b";
+    if (follow) {
+      map.easeTo({ center: lngLat as LngLatLike, duration: 500 });
+    }
+  }, [map, latestPoint?.lat, latestPoint?.lon, follow, gpsLocked, loraLink]);
+
+  useEffect(() => {
+    if (!map) return;
+    map.setLayoutProperty("satellite", "visibility", showImagery ? "visible" : "none");
+  }, [map, showImagery]);
 
   const viewPath = () => {
     if (!map || mapPoints.length === 0) return;
+    setFollow(false);
     const coordinates = mapPoints.map((point) => [point.lon, point.lat] as [number, number]);
     const bounds = coordinates.reduce(
       (result, coordinate) => result.extend(coordinate),
@@ -205,16 +266,46 @@ export default function MapPage({
         <p className="mt-1 text-xs text-slate-300">
           {mapPoints.length} of {MAX_MAP_POINTS} map points
         </p>
+        <p className={`mt-2 text-xs font-semibold ${
+          loraLink === "connected" ? "text-green" : loraLink === "lost" ? "text-red" : "text-slate-400"
+        }`}>
+          LoRa: {loraLink === "connected" ? "connected" : loraLink === "lost" ? "NO CONNECTION" : "receiver offline"}
+        </p>
+        <p className={`mt-1 text-xs font-semibold ${
+          loraLink !== "connected" ? "text-slate-400" : gpsLocked ? "text-green" : "text-yellow"
+        }`}>
+          GPS: {loraLink !== "connected"
+            ? "unknown (no link)"
+            : gpsLocked
+              ? `locked${sats !== null ? ` · ${sats} sats` : ""}`
+              : `no lock${sats !== null ? ` · ${sats} sats` : ""}`}
+        </p>
+        {latestPoint && (
+          <p className="mt-1 font-mono text-xs text-slate-200">
+            {latestPoint.lat.toFixed(6)}, {latestPoint.lon.toFixed(6)}
+          </p>
+        )}
         {!hasMapTiles && (
           <p className="mt-2 text-xs text-amber-300">
-            Add local tiles at public/maps/tiles/&#123;z&#125;/&#123;x&#125;/&#123;y&#125;.jpg for offline imagery.
+            No satellite imagery here; showing the offline street map.
           </p>
         )}
       </div>
 
       <div className="absolute bottom-4 left-4 z-20 flex gap-2">
-        <button className="rounded bg-slate-950/90 px-3 py-2 text-xs font-semibold text-white" onClick={followLatest}>
-          Follow rocket
+        <button
+          className={`rounded px-3 py-2 text-xs font-semibold ${
+            follow ? "bg-yellow text-slate-950" : "bg-slate-950/90 text-white"
+          }`}
+          onClick={() => setFollow((value) => !value)}
+        >
+          Follow rocket: {follow ? "on" : "off"}
+        </button>
+        <button
+          className="rounded bg-slate-950/90 px-3 py-2 text-xs font-semibold text-white"
+          onClick={() => setShowImagery((value) => !value)}
+        >
+          Satellite: {showImagery ? "on" : "off"}
         </button>
         <button className="rounded bg-slate-950/90 px-3 py-2 text-xs font-semibold text-white" onClick={viewPath}>
           View path
